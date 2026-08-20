@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Taeko"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Compact system tray to group apps",
+        "Icon": "pan-up-symbolic",
+        "Id": "org.bazzite.compactsystemtray",
+        "License": "GPL-2.0+",
+        "Name": "Compact System Tray",
+        "Version": "1.0.0"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

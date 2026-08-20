@@ -1,0 +1,36 @@
+# Build artifacts
+build/
+bin/
+lib/
+*.o
+*.o.d
+*.a
+*.so
+*.dylib
+*.dll
+moc_*.cpp
+*.moc
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.autogen/
+sysbassplugin_autogen/
+
+# Installed / copied binaries inside package
+package/contents/ui/org/bazzite/sysbass/*.so
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+compile_commands.json
+.clangd/
+.cache/
+
+# Local testing scratch files
+test.cpp
+test.qml
+scratch/
