@@ -4,6 +4,7 @@ import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
 import org.kde.kcmutils as KCM
 import org.kde.plasma.private.systemtray as SystemTray
+import "placement.js" as Placement
 
 KCM.SimpleKCM {
     id: configPage
@@ -60,18 +61,12 @@ KCM.SimpleKCM {
 
                 QQC2.ComboBox {
                     model: [i18n("Overflow popup"), i18n("Panel"), i18n("Always hidden")]
-                    currentIndex: configPage.cfg_shownItems.includes(row.itemId) ? 1
-                                : configPage.cfg_hiddenItems.includes(row.itemId) ? 2 : 0
+                    // Indexes match Placement.Overflow, Panel, Hidden
+                    currentIndex: Placement.placement(row.itemId, configPage.cfg_shownItems, configPage.cfg_hiddenItems)
                     onActivated: index => {
-                        const shown = configPage.cfg_shownItems.filter(id => id !== row.itemId);
-                        const hidden = configPage.cfg_hiddenItems.filter(id => id !== row.itemId);
-                        if (index === 1) {
-                            shown.push(row.itemId);
-                        } else if (index === 2) {
-                            hidden.push(row.itemId);
-                        }
-                        configPage.cfg_shownItems = shown;
-                        configPage.cfg_hiddenItems = hidden;
+                        const lists = Placement.setPlacement(row.itemId, index, configPage.cfg_shownItems, configPage.cfg_hiddenItems);
+                        configPage.cfg_shownItems = lists.shown;
+                        configPage.cfg_hiddenItems = lists.hidden;
                     }
                 }
             }

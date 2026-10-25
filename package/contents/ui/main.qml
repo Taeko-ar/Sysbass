@@ -6,6 +6,7 @@ import org.kde.kirigami as Kirigami
 import org.kde.kitemmodels as KItemModels
 import org.kde.plasma.private.systemtray as SystemTray
 import "org/bazzite/sysbass"
+import "placement.js" as Placement
 
 PlasmoidItem {
     id: root
@@ -37,7 +38,8 @@ PlasmoidItem {
         sourceModel: sniModel
         filterRowCallback: {
             const shown = Plasmoid.configuration.shownItems;
-            return (row, parent) => shown.includes(sniModel.itemId(row, parent));
+            const hidden = Plasmoid.configuration.hiddenItems;
+            return (row, parent) => Placement.placement(sniModel.itemId(row, parent), shown, hidden) === Placement.Panel;
         }
     }
 
@@ -47,10 +49,7 @@ PlasmoidItem {
         filterRowCallback: {
             const shown = Plasmoid.configuration.shownItems;
             const hidden = Plasmoid.configuration.hiddenItems;
-            return (row, parent) => {
-                const id = sniModel.itemId(row, parent);
-                return !shown.includes(id) && !hidden.includes(id);
-            };
+            return (row, parent) => Placement.placement(sniModel.itemId(row, parent), shown, hidden) === Placement.Overflow;
         }
     }
 

@@ -30,7 +30,7 @@ The plugin must be built against the **same Qt that plasmashell uses** (the syst
 The host has no Qt dev files, so `install.sh` builds inside a Fedora distrobox whose release matches the host (Bazzite 44 = Fedora 44). Create it once:
 
 ```bash
-distrobox create --name sysbass-build --image registry.fedoraproject.org/fedora:44 && distrobox enter sysbass-build -- sudo dnf install -y cmake gcc-c++ qt6-qtbase-devel qt6-qtdeclarative-devel kf6-kwindowsystem-devel
+distrobox create --name sysbass-build --image registry.fedoraproject.org/fedora:44 && distrobox enter sysbass-build -- sudo dnf install -y cmake gcc-c++ qt6-qtbase-devel qt6-qtdeclarative-devel kf6-kwindowsystem-devel dbus-daemon
 ```
 
 Then build, install and restart plasmashell:
