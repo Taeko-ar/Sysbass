@@ -1,38 +1,63 @@
 # Compact System Tray (Sysbass)
 
-Compact system tray plasmoid widget for KDE Plasma 6 (mostly for Bazzite) to group and manage system tray applications.
+Compact system tray plasmoid for KDE Plasma 6 (made for Bazzite). Pick which tray icons sit on the panel; the rest go into a small grid popup.
 
 ## Features
 
-- **Compact Grid & Overflow Menu:** Organize system tray icons into a clean compact layout with an expandable overflow grid.
-- **Customizable Layout:** Configure maximum rows and columns.
-- **Item Visibility Controls:** Choose which application icons appear on the main panel or stay inside the overflow popup.
-- **Native StatusNotifierItem Integration:** Native C++ backend plugin bridging Qt/QML and DBus StatusNotifierItem interfaces.
+- Panel icons plus an arrow that opens a grid of the other icons. The arrow points toward the popup on any panel edge.
+- Works on horizontal and vertical panels; icons stay centered in the panel's thickness.
+- Each icon can be set to Panel, Overflow popup or Always hidden (Configure System Tray Icons…, saved on Apply).
+- Configurable maximum columns and rows; the grid scrolls when there are more icons.
+- Uses the app's theme icon or pixmap, and its attention icon when it needs attention.
+- Mouse:
+  - Left click activates the app. Apps that reject it (libappindicator, Electron) show their menu instead, like the stock tray.
+  - Left click on Steam opens Steam's main window.
+  - Middle click runs the secondary action.
+  - Right click opens the app's menu (DBusMenu), with submenus, checkboxes, radio items and icons.
+  - Wheel scrolls (vertical and horizontal).
+- All DBus calls are async, so a hung tray app can't freeze the panel.
+- On Wayland, apps get an activation token so their window comes to the front, and menus open next to the icon.
 
 ## Requirements
 
-- KDE Plasma 6
-- Qt 6 (Core, Gui, Qml, Quick, DBus, Widgets)
-- CMake (>= 3.16)
-- C++17 compiler (`g++` or `clang++`)
+- KDE Plasma 6 (uses the private `org.kde.plasma.private.systemtray` QML module, tested against Plasma 6.7)
+- Build: CMake ≥ 3.20, a C++17 compiler, Qt 6 (Core, Gui, Qml, Quick, DBus, Widgets), KF6 WindowSystem
 
-## Installation & Build
+The plugin must be built against the **same Qt that plasmashell uses** (the system packages). A plugin linked against Homebrew Qt loads a second Qt into plasmashell and can crash it.
 
-Run the installation script to compile the C++ plugin, register the plasmoid package, and refresh `plasmashell`:
+## Build and install on Bazzite / Fedora Atomic
+
+The host has no Qt dev files, so `install.sh` builds inside a Fedora distrobox whose release matches the host (Bazzite 44 = Fedora 44). Create it once:
 
 ```bash
-chmod +x ./install.sh
+distrobox create --name sysbass-build --image registry.fedoraproject.org/fedora:44 && distrobox enter sysbass-build -- sudo dnf install -y cmake gcc-c++ qt6-qtbase-devel qt6-qtdeclarative-devel kf6-kwindowsystem-devel
+```
+
+Then build, install and restart plasmashell:
+
+```bash
 ./install.sh
 ```
 
-### Manual Build
+Use another container with `SYSBASS_BOX=name ./install.sh`. If the container can't see the project directory, recreate it with `--volume /var/mnt/hdd:/var/mnt/hdd`.
+
+On a normal distro with the dev packages installed, `install.sh` builds on the host.
+
+## Debugging
+
+Run the widget in its own window to see QML errors without touching the panel:
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-make -j$(nproc)
+plasmawindowed org.bazzite.compactsystemtray
 ```
+
+Errors from the panel copy go to the journal:
+
+```bash
+journalctl --user -b -0 | grep -i compactsystemtray
+```
+
+`TypeError: Passing incompatible arguments to C++ functions` means plasmashell loaded an old plugin build. Remove any copies outside the plasmoid package (older versions installed to `~/.local/lib/qt6/qml/org/bazzite` and `~/.local/lib64/qt6/qml/org/bazzite`), then run `./install.sh` again.
 
 ## License
 

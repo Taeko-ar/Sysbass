@@ -1,361 +1,285 @@
 #include "sysbassbackend.h"
+
+#include <KWaylandExtras>
+#include <KWindowSystem>
+
+#include <QAction>
+#include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusMessage>
-#include <QDBusInterface>
-#include <QDBusReply>
-#include <QDBusPendingCall>
-#include <QDBusPendingCallWatcher>
-#include <QGuiApplication>
-#include <QQuickWindow>
-#include <QScreen>
-#include <QProcess>
-#include <QTimer>
-#include <QDebug>
-#include <QMenu>
-#include <QAction>
-#include <QtEndian>
-#include <QIcon>
 #include <QDBusObjectPath>
+#include <QDBusPendingCallWatcher>
+#include <QDBusVariant>
+#include <QFuture>
+#include <QIcon>
+#include <QMenu>
+#include <QPixmap>
+#include <QProcess>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QWindow>
 
-SysbassImageProvider::SysbassImageProvider()
-    : QQuickImageProvider(QQuickImageProvider::Image)
+namespace
 {
+const QString sniInterface = QStringLiteral("org.kde.StatusNotifierItem");
+const QString menuInterface = QStringLiteral("com.canonical.dbusmenu");
+
+// DataEngineSource is "bus/object/path"; a bare bus name means the default path
+void splitSource(const QString &source, QString &dest, QString &path)
+{
+    const int slash = source.indexOf(QLatin1Char('/'));
+    dest = slash < 0 ? source : source.left(slash);
+    path = slash < 0 ? QStringLiteral("/StatusNotifierItem") : source.mid(slash);
 }
 
-QImage SysbassImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
+QPoint globalPos(QQuickItem *item, qreal x, qreal y)
 {
-    QString dest, path;
-    SysbassBackend::parseServicePath(QUrl::fromPercentEncoding(id.toUtf8()), dest, path);
-    QDBusMessage msg = QDBusMessage::createMethodCall(dest, path, QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
-    msg << QStringLiteral("org.kde.StatusNotifierItem") << QStringLiteral("IconPixmap");
-    QDBusReply<QDBusVariant> reply = QDBusConnection::sessionBus().call(msg);
-    if (!reply.isValid()) return QImage();
+    return item ? item->mapToGlobal(QPointF(x, y)).toPoint() : QPoint(qRound(x), qRound(y));
+}
 
-    QDBusArgument arg = reply.value().variant().value<QDBusArgument>();
-    if (arg.currentType() != QDBusArgument::ArrayType) return QImage();
+QDBusMessage sniCall(const QString &dest, const QString &path, const QString &method, QPoint pos)
+{
+    QDBusMessage msg = QDBusMessage::createMethodCall(dest, path, sniInterface, method);
+    msg << pos.x() << pos.y();
+    return msg;
+}
 
-    QImage bestImage;
+// Async call; fn gets the reply (or error) message. Calls never block plasmashell.
+template<typename F>
+void callAsync(const QDBusMessage &msg, QObject *context, F fn)
+{
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(msg), context);
+    QObject::connect(watcher, &QDBusPendingCallWatcher::finished, context, [fn](QDBusPendingCallWatcher *w) {
+        w->deleteLater();
+        fn(w->reply());
+    });
+}
+
+bool isError(const QDBusMessage &reply)
+{
+    return reply.type() == QDBusMessage::ErrorMessage;
+}
+
+// One dbusmenu layout node: (ia{sv}av)
+struct MenuNode {
+    int id = 0;
+    QVariantMap props;
+    QList<QDBusArgument> children;
+};
+
+MenuNode readNode(const QDBusArgument &arg)
+{
+    MenuNode node;
+    arg.beginStructure();
+    arg >> node.id >> node.props;
     arg.beginArray();
     while (!arg.atEnd()) {
-        arg.beginStructure();
-        int w, h;
-        QByteArray data;
-        arg >> w >> h >> data;
-        arg.endStructure();
-
-        QImage img(w, h, QImage::Format_ARGB32);
-        const quint32* src = reinterpret_cast<const quint32*>(data.constData());
-        quint32* dst = reinterpret_cast<quint32*>(img.bits());
-        for (int i = 0; i < w * h; ++i) {
-            dst[i] = qFromBigEndian(src[i]);
-        }
-
-        if (img.width() >= 24 && bestImage.isNull()) {
-            bestImage = img.copy();
-        } else if (img.width() > bestImage.width()) {
-            bestImage = img.copy();
-        }
+        QDBusVariant child;
+        arg >> child;
+        node.children << child.variant().value<QDBusArgument>();
     }
     arg.endArray();
-
-    if (size) *size = bestImage.size();
-    return bestImage;
+    arg.endStructure();
+    return node;
 }
 
-SysbassBackend::SysbassBackend(QObject *parent)
-    : QObject(parent)
+void fillMenu(QMenu *menu, const MenuNode &node, const QString &dest, const QString &menuPath)
 {
-}
+    for (const QDBusArgument &childArg : node.children) {
+        const MenuNode child = readNode(childArg);
+        const QVariantMap &p = child.props;
 
-void SysbassBackend::parseServicePath(const QString &serviceSpec, QString &dest, QString &path)
-{
-    if (serviceSpec.contains(QLatin1Char('/'))) {
-        int slashIdx = serviceSpec.indexOf(QLatin1Char('/'));
-        dest = serviceSpec.left(slashIdx);
-        path = serviceSpec.mid(slashIdx);
-    } else {
-        dest = serviceSpec;
-        path = QStringLiteral("/StatusNotifierItem");
-    }
-}
-
-void SysbassBackend::ungrabMouseHack(QQuickItem *visualItem)
-{
-    if (visualItem && visualItem->window() && visualItem->window()->mouseGrabberItem()) {
-        QTimer::singleShot(0, visualItem, [visualItem]() {
-            if (visualItem->window() && visualItem->window()->mouseGrabberItem()) {
-                visualItem->window()->mouseGrabberItem()->ungrabMouse();
-            }
-        });
-    }
-}
-
-QPointF SysbassBackend::calculateGlobalPos(QQuickItem *visualItem, int x, int y)
-{
-    if (!visualItem) {
-        return QPointF(x, y);
-    }
-
-    QPointF pos = visualItem->mapToScene(QPointF(x, y));
-    QQuickWindow *window = visualItem->window();
-    if (window && window->screen()) {
-        pos = window->mapToGlobal(pos.toPoint());
-        
-        // Handle high DPI scaling and multi-monitor offset
-        QScreen *screen = window->screen();
-        qreal devicePixelRatio = screen->devicePixelRatio();
-        QRect geometry = screen->geometry();
-        
-        // Multi-monitor scaling adjustment matching KDE systemtray logic
-        pos = QPointF(geometry.topLeft() + (pos - geometry.topLeft()) * devicePixelRatio);
-    }
-    return pos;
-}
-
-void SysbassBackend::provideXdgActivationToken(const QString &dest, const QString &path, std::function<void()> callback)
-{
-    bool isWayland = QGuiApplication::platformName().contains(QStringLiteral("wayland"), Qt::CaseInsensitive);
-    if (!isWayland) {
-        if (callback) callback();
-        return;
-    }
-
-    // Request activation token via session bus or portal interface
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        QStringLiteral("org.freedesktop.portal.Desktop"),
-        QStringLiteral("/org/freedesktop/portal/desktop"),
-        QStringLiteral("org.freedesktop.portal.Request"),
-        QStringLiteral("Close")
-    );
-
-    // Call callback to proceed with action
-    if (callback) {
-        callback();
-    }
-}
-
-void SysbassBackend::sendDbusEvent(const QString &serviceSpec, const QString &method, int x, int y, QQuickItem *visualItem)
-{
-    if (serviceSpec.isEmpty()) return;
-
-    ungrabMouseHack(visualItem);
-    QPointF globalPos = calculateGlobalPos(visualItem, x, y);
-    int gx = qRound(globalPos.x());
-    int gy = qRound(globalPos.y());
-
-    QString dest, path;
-    parseServicePath(serviceSpec, dest, path);
-
-    provideXdgActivationToken(dest, path, [this, dest, path, method, gx, gy]() {
-        QDBusMessage msg = QDBusMessage::createMethodCall(
-            dest,
-            path,
-            QStringLiteral("org.kde.StatusNotifierItem"),
-            method
-        );
-        msg << gx << gy;
-
-        QDBusConnection::sessionBus().asyncCall(msg);
-    });
-}
-
-void SysbassBackend::activate(const QString &service, int x, int y, QQuickItem *visualItem)
-{
-    if (service.contains(QStringLiteral("steam"), Qt::CaseInsensitive)) {
-        QProcess::startDetached(QStringLiteral("steam"), QStringList() << QStringLiteral("steam://open/main"));
-        return;
-    }
-
-    ungrabMouseHack(visualItem);
-    QPointF globalPos = calculateGlobalPos(visualItem, x, y);
-    int gx = qRound(globalPos.x());
-    int gy = qRound(globalPos.y());
-
-    QString dest, path;
-    parseServicePath(service, dest, path);
-
-    provideXdgActivationToken(dest, path, [this, service, dest, path, gx, gy, visualItem]() {
-        QDBusMessage msg = QDBusMessage::createMethodCall(
-            dest,
-            path,
-            QStringLiteral("org.kde.StatusNotifierItem"),
-            QStringLiteral("Activate")
-        );
-        msg << gx << gy;
-
-        QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(msg);
-        QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, this);
-
-        // Fallback to ContextMenu if Activate returns error (e.g. libappindicator apps)
-        connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, service, gx, gy, visualItem](QDBusPendingCallWatcher *w) {
-            QDBusPendingReply<> reply = *w;
-            if (reply.isError()) {
-                contextMenu(service, gx, gy, visualItem);
-            }
-            w->deleteLater();
-        });
-    });
-}
-
-void SysbassBackend::secondaryActivate(const QString &service, int x, int y, QQuickItem *visualItem)
-{
-    sendDbusEvent(service, QStringLiteral("SecondaryActivate"), x, y, visualItem);
-}
-
-void SysbassBackend::contextMenu(const QString &service, int x, int y, QQuickItem *visualItem)
-{
-    if (service.contains(QStringLiteral("steam"), Qt::CaseInsensitive)) {
-        secondaryActivate(service, x, y, visualItem);
-        return;
-    }
-
-    ungrabMouseHack(visualItem);
-    QPointF globalPos = calculateGlobalPos(visualItem, x, y);
-    int gx = qRound(globalPos.x());
-    int gy = qRound(globalPos.y());
-
-    showDBusMenu(service, gx, gy, visualItem);
-}
-
-void SysbassBackend::showDBusMenu(const QString &service, int gx, int gy, QQuickItem *visualItem)
-{
-    QString dest, path;
-    parseServicePath(service, dest, path);
-
-    // Get Menu object path
-    QDBusMessage msg = QDBusMessage::createMethodCall(dest, path, QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
-    msg << QStringLiteral("org.kde.StatusNotifierItem") << QStringLiteral("Menu");
-    QDBusReply<QDBusVariant> reply = QDBusConnection::sessionBus().call(msg);
-    
-    if (reply.isValid() && reply.value().variant().canConvert<QDBusObjectPath>()) {
-        QString menuPath = reply.value().variant().value<QDBusObjectPath>().path();
-        
-        QMenu *menu = buildMenu(dest, menuPath);
-        if (menu) {
-            if (m_contextMenu) m_contextMenu->deleteLater();
-            m_contextMenu = menu;
-            menu->popup(QPoint(gx, gy));
-            return; // Success
+        if (!p.value(QStringLiteral("visible"), true).toBool()) {
+            continue;
         }
-    }
-    
-    // Fallback to ContextMenu method if Menu property fails
-    provideXdgActivationToken(dest, path, [this, service, dest, path, gx, gy, visualItem]() {
-        QDBusMessage fallbackMsg = QDBusMessage::createMethodCall(dest, path, QStringLiteral("org.kde.StatusNotifierItem"), QStringLiteral("ContextMenu"));
-        fallbackMsg << gx << gy;
-
-        QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(fallbackMsg);
-        QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, this);
-        connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, service, gx, gy, visualItem](QDBusPendingCallWatcher *w) {
-            QDBusPendingReply<> r = *w;
-            if (r.isError()) {
-                secondaryActivate(service, gx, gy, visualItem);
-            }
-            w->deleteLater();
-        });
-    });
-}
-
-void SysbassBackend::addDBusMenuItem(QMenu *menu, const QDBusArgument &arg, const QString &dest, const QString &path)
-{
-    if (arg.currentType() != QDBusArgument::StructureType) return;
-    
-    arg.beginStructure();
-    int id;
-    arg >> id;
-    QVariantMap properties;
-    arg >> properties;
-    
-    QString type = properties.value(QStringLiteral("type")).toString();
-    QString label = properties.value(QStringLiteral("label")).toString();
-    bool enabled = properties.value(QStringLiteral("enabled"), true).toBool();
-    bool visible = properties.value(QStringLiteral("visible"), true).toBool();
-    
-    if (visible && id != 0) { 
-        if (type == QStringLiteral("separator")) {
+        if (p.value(QStringLiteral("type")).toString() == QLatin1String("separator")) {
             menu->addSeparator();
-        } else {
-            QAction *action = new QAction(label, menu);
-            action->setEnabled(enabled);
-            connect(action, &QAction::triggered, [dest, path, id]() {
-                QDBusMessage eventMsg = QDBusMessage::createMethodCall(dest, path, QStringLiteral("com.canonical.dbusmenu"), QStringLiteral("Event"));
-                eventMsg << id << QStringLiteral("clicked") << QVariant::fromValue(QDBusVariant(QStringLiteral(""))) << (uint)0;
-                QDBusConnection::sessionBus().asyncCall(eventMsg);
-            });
-            menu->addAction(action);
+            continue;
         }
-    }
-    
-    if (!arg.atEnd()) {
-        arg.beginArray();
-        while (!arg.atEnd()) {
-            QDBusVariant v;
-            arg >> v;
-            if (v.variant().canConvert<QDBusArgument>()) {
-                if (id == 0) {
-                    addDBusMenuItem(menu, v.variant().value<QDBusArgument>(), dest, path);
-                } else if (visible && type != QStringLiteral("separator")) {
-                    // Create submenu if needed (simplified)
-                    QMenu *subMenu = new QMenu(label, menu);
-                    addDBusMenuItem(subMenu, v.variant().value<QDBusArgument>(), dest, path);
-                    if (!subMenu->isEmpty()) {
-                        QAction *lastAction = menu->actions().last();
-                        lastAction->setMenu(subMenu);
-                    } else {
-                        subMenu->deleteLater();
-                    }
-                }
+
+        QAction *action = menu->addAction(dbusMenuLabelToQt(p.value(QStringLiteral("label")).toString()));
+        action->setEnabled(p.value(QStringLiteral("enabled"), true).toBool());
+
+        const QString iconName = p.value(QStringLiteral("icon-name")).toString();
+        if (!iconName.isEmpty()) {
+            action->setIcon(QIcon::fromTheme(iconName));
+        } else {
+            QPixmap pixmap;
+            if (pixmap.loadFromData(p.value(QStringLiteral("icon-data")).toByteArray())) {
+                action->setIcon(QIcon(pixmap));
             }
         }
-        arg.endArray();
+
+        const QString toggleType = p.value(QStringLiteral("toggle-type")).toString();
+        if (toggleType == QLatin1String("checkmark") || toggleType == QLatin1String("radio")) {
+            action->setCheckable(true);
+            action->setChecked(p.value(QStringLiteral("toggle-state")).toInt() == 1);
+        }
+
+        if (!child.children.isEmpty()) {
+            auto *subMenu = new QMenu(menu);
+            fillMenu(subMenu, child, dest, menuPath);
+            action->setMenu(subMenu);
+            continue;
+        }
+
+        const int id = child.id;
+        QObject::connect(action, &QAction::triggered, menu, [dest, menuPath, id]() {
+            QDBusMessage msg = QDBusMessage::createMethodCall(dest, menuPath, menuInterface, QStringLiteral("Event"));
+            msg << id << QStringLiteral("clicked") << QVariant::fromValue(QDBusVariant(QString())) << 0u;
+            QDBusConnection::sessionBus().asyncCall(msg);
+        });
     }
-    arg.endStructure();
+}
+} // namespace
+
+QString dbusMenuLabelToQt(const QString &label)
+{
+    QString out;
+    out.reserve(label.size());
+    for (int i = 0; i < label.size(); ++i) {
+        const QChar c = label.at(i);
+        if (c == QLatin1Char('_')) {
+            const bool literal = i + 1 < label.size() && label.at(i + 1) == QLatin1Char('_');
+            out += literal ? QLatin1Char('_') : QLatin1Char('&');
+            i += literal ? 1 : 0;
+        } else if (c == QLatin1Char('&')) {
+            out += QStringLiteral("&&");
+        } else {
+            out += c;
+        }
+    }
+    return out;
 }
 
-QMenu* SysbassBackend::buildMenu(const QString &dest, const QString &path)
+void SysbassBackend::activate(const QString &source, QQuickItem *item, qreal x, qreal y)
 {
-    QDBusMessage msg = QDBusMessage::createMethodCall(dest, path, QStringLiteral("com.canonical.dbusmenu"), QStringLiteral("GetLayout"));
-    msg << 0 << -1 << QStringList();
-    QDBusReply<QDBusArgument> reply = QDBusConnection::sessionBus().call(msg);
-    
-    if (!reply.isValid()) return nullptr;
-    
-    QDBusArgument arg = reply.value();
-    uint revision;
-    arg.beginStructure();
-    arg >> revision;
-    
-    QDBusVariant layoutVar;
-    arg >> layoutVar;
-    arg.endStructure();
-    
-    QMenu *menu = new QMenu();
-    if (layoutVar.variant().canConvert<QDBusArgument>()) {
-        addDBusMenuItem(menu, layoutVar.variant().value<QDBusArgument>(), dest, path);
+    // Steam's tray icon rejects Activate; ask Steam itself to show its main window
+    if (source.contains(QLatin1String("steam"), Qt::CaseInsensitive)) {
+        QProcess::startDetached(QStringLiteral("steam"), {QStringLiteral("steam://open/main")});
+        return;
     }
-    
+    callItem(source, QStringLiteral("Activate"), item, x, y);
+}
+
+void SysbassBackend::secondaryActivate(const QString &source, QQuickItem *item, qreal x, qreal y)
+{
+    callItem(source, QStringLiteral("SecondaryActivate"), item, x, y);
+}
+
+void SysbassBackend::contextMenu(const QString &source, QQuickItem *item, qreal x, qreal y)
+{
+    if (source.isEmpty()) {
+        return;
+    }
+    QString dest, path;
+    splitSource(source, dest, path);
+    requestMenu(dest, path, item, globalPos(item, x, y));
+}
+
+void SysbassBackend::scroll(const QString &source, int delta, const QString &orientation)
+{
+    if (source.isEmpty()) {
+        return;
+    }
+    QString dest, path;
+    splitSource(source, dest, path);
+    QDBusMessage msg = QDBusMessage::createMethodCall(dest, path, sniInterface, QStringLiteral("Scroll"));
+    msg << delta << orientation;
+    QDBusConnection::sessionBus().asyncCall(msg);
+}
+
+void SysbassBackend::callItem(const QString &source, const QString &method, QQuickItem *item, qreal x, qreal y)
+{
+    if (source.isEmpty()) {
+        return;
+    }
+    QString dest, path;
+    splitSource(source, dest, path);
+    const QPoint pos = globalPos(item, x, y);
+    const QPointer<QQuickItem> guard(item);
+
+    auto send = [this, dest, path, method, pos, guard]() {
+        callAsync(sniCall(dest, path, method, pos), this, [this, dest, path, method, pos, guard](const QDBusMessage &reply) {
+            // libappindicator items (Steam, Electron apps) reject Activate; show their menu like the stock tray
+            if (isError(reply) && method == QLatin1String("Activate")) {
+                requestMenu(dest, path, guard, pos);
+            }
+        });
+    };
+
+    QWindow *window = item ? item->window() : nullptr;
+    if (!KWindowSystem::isPlatformWayland() || !window) {
+        send();
+        return;
+    }
+
+    // On Wayland the app needs a token from the compositor to raise its window
+    KWaylandExtras::xdgActivationToken(window, QString()).then(this, [dest, path, send](const QString &token) {
+        QDBusMessage msg = QDBusMessage::createMethodCall(dest, path, sniInterface, QStringLiteral("ProvideXdgActivationToken"));
+        msg << token;
+        QDBusConnection::sessionBus().asyncCall(msg); // same bus and destination, so it arrives before the activation call
+        send();
+    });
+}
+
+void SysbassBackend::requestMenu(const QString &dest, const QString &path, QPointer<QQuickItem> item, QPoint pos)
+{
+    auto fallback = [dest, path, pos]() {
+        // Item has no dbusmenu: ask it to draw its own menu
+        QDBusConnection::sessionBus().asyncCall(sniCall(dest, path, QStringLiteral("ContextMenu"), pos));
+    };
+
+    QDBusMessage getMenu = QDBusMessage::createMethodCall(dest, path, QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+    getMenu << sniInterface << QStringLiteral("Menu");
+
+    callAsync(getMenu, this, [this, dest, item, pos, fallback](const QDBusMessage &reply) {
+        const QString menuPath =
+            isError(reply) ? QString() : reply.arguments().value(0).value<QDBusVariant>().variant().value<QDBusObjectPath>().path();
+        if (menuPath.isEmpty() || menuPath == QLatin1String("/")) {
+            fallback();
+            return;
+        }
+
+        // Some apps (Electron) fill the menu only after AboutToShow; its result does not matter
+        QDBusMessage aboutToShow = QDBusMessage::createMethodCall(dest, menuPath, menuInterface, QStringLiteral("AboutToShow"));
+        aboutToShow << 0;
+        callAsync(aboutToShow, this, [this, dest, menuPath, item, pos, fallback](const QDBusMessage &) {
+            QDBusMessage getLayout = QDBusMessage::createMethodCall(dest, menuPath, menuInterface, QStringLiteral("GetLayout"));
+            getLayout << 0 << -1 << QStringList();
+            callAsync(getLayout, this, [this, dest, menuPath, item, pos, fallback](const QDBusMessage &layoutReply) {
+                // GetLayout returns (u revision, (ia{sv}av) layout)
+                if (isError(layoutReply) || layoutReply.arguments().size() < 2) {
+                    fallback();
+                    return;
+                }
+                showMenu(dest, menuPath, layoutReply.arguments().at(1).value<QDBusArgument>(), item, pos);
+            });
+        });
+    });
+}
+
+void SysbassBackend::showMenu(const QString &dest, const QString &menuPath, const QDBusArgument &layout, QPointer<QQuickItem> item, QPoint pos)
+{
+    auto *menu = new QMenu;
+    fillMenu(menu, readNode(layout), dest, menuPath);
     if (menu->isEmpty()) {
         delete menu;
-        return nullptr;
+        return;
     }
-    
-    return menu;
-}
+    // Deferred, so a triggered action still runs before the menu goes away
+    connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
 
-void SysbassBackend::scroll(const QString &service, int delta, const QString &orientation)
-{
-    if (service.isEmpty()) return;
+    if (m_menu) {
+        m_menu->hide();
+        m_menu->deleteLater();
+    }
+    m_menu = menu;
 
-    QString dest, path;
-    parseServicePath(service, dest, path);
-
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        dest,
-        path,
-        QStringLiteral("org.kde.StatusNotifierItem"),
-        QStringLiteral("Scroll")
-    );
-    msg << delta << orientation;
-
-    QDBusConnection::sessionBus().asyncCall(msg);
+    // Wayland places popups relative to a parent window
+    if (item && item->window()) {
+        menu->winId();
+        menu->windowHandle()->setTransientParent(item->window());
+    }
+    menu->popup(pos);
 }

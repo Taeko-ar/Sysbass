@@ -1,50 +1,46 @@
 #!/usr/bin/env bash
-set -e
+# Builds the C++ plugin and installs/upgrades the plasmoid for the current user.
+# Build runs on the host when Qt6 dev files exist, else inside distrobox $SYSBASS_BOX.
+set -euo pipefail
 
 PACKAGE_ID="org.bazzite.compactsystemtray"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR/package"
+PLUGIN_DIR="$PACKAGE_DIR/contents/ui/org/bazzite/sysbass"
+BUILD_DIR="$SCRIPT_DIR/build"
+BOX="${SYSBASS_BOX:-sysbass-build}"
 
-echo "=== Building Sysbass C++ Plugin ==="
-rm -rf "$SCRIPT_DIR/build"
-mkdir -p "$SCRIPT_DIR/build"
-cd "$SCRIPT_DIR/build"
-cmake "$SCRIPT_DIR" -DCMAKE_PREFIX_PATH="/home/linuxbrew/.linuxbrew/opt/qt;/home/linuxbrew/.linuxbrew"
-make -j$(nproc)
+build="rm -rf '$BUILD_DIR' && cmake -S '$SCRIPT_DIR' -B '$BUILD_DIR' -DCMAKE_BUILD_TYPE=Release && cmake --build '$BUILD_DIR' -j\$(nproc) && ctest --test-dir '$BUILD_DIR' --output-on-failure"
 
-TARGET_QML_DIR="$PACKAGE_DIR/contents/ui/org/bazzite/sysbass"
-mkdir -p "$TARGET_QML_DIR"
-cp -f "$SCRIPT_DIR/qmldir" "$TARGET_QML_DIR/"
-cp -f "$SCRIPT_DIR/build/libsysbassplugin.so" "$TARGET_QML_DIR/"
-cp -f "$SCRIPT_DIR/build/libsysbassplugin.so" "$TARGET_QML_DIR/sysbassplugin.so"
+echo "=== Building plugin ==="
+if [ -e /usr/lib64/cmake/Qt6Qml/Qt6QmlConfig.cmake ] || [ -e /usr/lib/cmake/Qt6Qml/Qt6QmlConfig.cmake ]; then
+    bash -c "$build"
+else
+    echo "No Qt6 dev files on host, building in distrobox '$BOX'"
+    # Qt refuses a plugin built against a newer major.minor than it runs
+    host_qt=$(rpm -q --qf '%{VERSION}' qt6-qtbase | cut -d. -f1,2)
+    box_qt=$(distrobox enter "$BOX" -- rpm -q --qf '%{VERSION}' qt6-qtbase | tr -d '\r' | cut -d. -f1,2)
+    if [ "$(printf '%s\n%s\n' "$host_qt" "$box_qt" | sort -V | tail -1)" != "$host_qt" ]; then
+        echo "Container Qt $box_qt is newer than host Qt $host_qt; plasmashell would refuse the plugin" >&2
+        exit 1
+    fi
+    distrobox enter "$BOX" -- bash -c "$build"
+fi
 
-# Also copy to global user Qt6 import paths for system-wide QML loader lookup
-GLOBAL_QT_DIR="$HOME/.local/lib/qt6/qml/org/bazzite/sysbass"
-mkdir -p "$GLOBAL_QT_DIR"
-cp -f "$SCRIPT_DIR/qmldir" "$GLOBAL_QT_DIR/"
-cp -f "$SCRIPT_DIR/build/libsysbassplugin.so" "$GLOBAL_QT_DIR/"
-cp -f "$SCRIPT_DIR/build/libsysbassplugin.so" "$GLOBAL_QT_DIR/sysbassplugin.so"
+# Plasma loads the plugin straight from the package directory
+mkdir -p "$PLUGIN_DIR"
+rm -f "$PLUGIN_DIR/sysbassplugin.so"
+cp -f "$BUILD_DIR/libsysbassplugin.so" "$PLUGIN_DIR/"
 
-GLOBAL_QT64_DIR="$HOME/.local/lib64/qt6/qml/org/bazzite/sysbass"
-mkdir -p "$GLOBAL_QT64_DIR"
-cp -f "$SCRIPT_DIR/qmldir" "$GLOBAL_QT64_DIR/"
-cp -f "$SCRIPT_DIR/build/libsysbassplugin.so" "$GLOBAL_QT64_DIR/"
-cp -f "$SCRIPT_DIR/build/libsysbassplugin.so" "$GLOBAL_QT64_DIR/sysbassplugin.so"
-
-echo "=== Installing/Updating Plasmoid Package $PACKAGE_ID ==="
-
-if kpackagetool6 --type Plasma/Applet --list | grep -q "$PACKAGE_ID"; then
-    echo "Upgrading existing plasmoid package $PACKAGE_ID..."
+echo "=== Installing plasmoid $PACKAGE_ID ==="
+if kpackagetool6 --type Plasma/Applet --show "$PACKAGE_ID" >/dev/null 2>&1; then
     kpackagetool6 --type Plasma/Applet --upgrade "$PACKAGE_DIR"
 else
-    echo "Installing new plasmoid package $PACKAGE_ID..."
     kpackagetool6 --type Plasma/Applet --install "$PACKAGE_DIR"
 fi
 
-echo "=== Plasmoid package updated in ~/.local/share/plasma/plasmoids ==="
-
-if systemctl --user is-active --quiet plasma-plasmashell.service 2>/dev/null; then
-    echo "Restarting plasma-plasmashell systemd service..."
+# A loaded plugin can't be swapped, so plasmashell has to restart
+if systemctl --user is-active --quiet plasma-plasmashell.service; then
+    echo "Restarting plasmashell..."
     systemctl --user restart plasma-plasmashell.service
-    echo "plasmashell restarted safely via systemd!"
 fi
