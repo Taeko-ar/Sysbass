@@ -189,6 +189,15 @@ void SysbassBackend::scroll(const QString &source, int delta, const QString &ori
     QDBusConnection::sessionBus().asyncCall(msg);
 }
 
+void SysbassBackend::showClipboard()
+{
+    // Klipper lives in the Clipboard widget; it must be loaded somewhere (panel or desktop)
+    QDBusConnection::sessionBus().asyncCall(QDBusMessage::createMethodCall(QStringLiteral("org.kde.klipper"),
+                                                                           QStringLiteral("/klipper"),
+                                                                           QStringLiteral("org.kde.klipper.klipper"),
+                                                                           QStringLiteral("showKlipperPopupMenu")));
+}
+
 void SysbassBackend::callItem(const QString &source, const QString &method, QQuickItem *item, qreal x, qreal y)
 {
     if (source.isEmpty()) {

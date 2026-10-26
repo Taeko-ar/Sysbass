@@ -8,6 +8,7 @@ Compact system tray plasmoid for KDE Plasma 6 (made for Bazzite). Pick which tra
 - Works on horizontal and vertical panels; icons stay centered in the panel's thickness.
 - Each icon can be set to Panel, Overflow popup, Always hidden or Panel when active (Configure System Tray Icons…, saved on Apply). Panel when active puts the icon on the panel while the app reports Active or NeedsAttention, like the stock tray, and in the popup while it's Passive. New icons go to the popup.
 - Configurable maximum columns and rows; the grid scrolls when there are more icons.
+- Clipboard button at the end of the popup grid opens Klipper's history. Klipper runs inside Plasma's Clipboard widget, so keep that widget loaded somewhere, for example on the desktop.
 - Uses the app's theme icon or pixmap, and its attention icon when it needs attention.
 - Mouse:
   - Left click activates the app. Apps that reject it (libappindicator, Electron) show their menu instead, like the stock tray.
