@@ -26,20 +26,26 @@ PlasmoidItem {
     SystemTray.StatusNotifierModel {
         id: sniModel
         readonly property int idRole: KItemModels.KRoleNames.role("Id")
+        readonly property int statusRole: KItemModels.KRoleNames.role("status")
 
-        function itemId(row, parent) {
-            return sniModel.data(sniModel.index(row, 0, parent), idRole) ?? "";
+        // Panel, Overflow or Hidden for this row right now
+        function where(row, parent, shown, hidden, auto) {
+            const index = sniModel.index(row, 0, parent);
+            const status = sniModel.data(index, statusRole);
+            const active = status === PlasmaCore.Types.ActiveStatus || status === PlasmaCore.Types.NeedsAttentionStatus;
+            return Placement.resolve(Placement.placement(sniModel.data(index, idRole) ?? "", shown, hidden, auto), active);
         }
     }
 
-    // Rebinding the callback (it reads the config) makes the proxy refilter on config changes
+    // Rebinding the callback (it reads the config) makes the proxy refilter on config changes.
+    // Status changes refilter through dataChanged (dynamicSortFilter).
     KItemModels.KSortFilterProxyModel {
         id: panelModel
         sourceModel: sniModel
         filterRowCallback: {
-            const shown = Plasmoid.configuration.shownItems;
-            const hidden = Plasmoid.configuration.hiddenItems;
-            return (row, parent) => Placement.placement(sniModel.itemId(row, parent), shown, hidden) === Placement.Panel;
+            const c = Plasmoid.configuration;
+            const shown = c.shownItems, hidden = c.hiddenItems, auto = c.autoItems;
+            return (row, parent) => sniModel.where(row, parent, shown, hidden, auto) === Placement.Panel;
         }
     }
 
@@ -47,9 +53,9 @@ PlasmoidItem {
         id: overflowModel
         sourceModel: sniModel
         filterRowCallback: {
-            const shown = Plasmoid.configuration.shownItems;
-            const hidden = Plasmoid.configuration.hiddenItems;
-            return (row, parent) => Placement.placement(sniModel.itemId(row, parent), shown, hidden) === Placement.Overflow;
+            const c = Plasmoid.configuration;
+            const shown = c.shownItems, hidden = c.hiddenItems, auto = c.autoItems;
+            return (row, parent) => sniModel.where(row, parent, shown, hidden, auto) === Placement.Overflow;
         }
     }
 

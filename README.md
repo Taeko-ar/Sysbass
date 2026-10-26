@@ -6,7 +6,7 @@ Compact system tray plasmoid for KDE Plasma 6 (made for Bazzite). Pick which tra
 
 - Panel icons plus an arrow that opens a grid of the other icons. The arrow points toward the popup on any panel edge.
 - Works on horizontal and vertical panels; icons stay centered in the panel's thickness.
-- Each icon can be set to Panel, Overflow popup or Always hidden (Configure System Tray Icons…, saved on Apply).
+- Each icon can be set to Panel, Overflow popup, Always hidden or Panel when active (Configure System Tray Icons…, saved on Apply). Panel when active puts the icon on the panel while the app reports Active or NeedsAttention, like the stock tray, and in the popup while it's Passive. New icons go to the popup.
 - Configurable maximum columns and rows; the grid scrolls when there are more icons.
 - Uses the app's theme icon or pixmap, and its attention icon when it needs attention.
 - Mouse:

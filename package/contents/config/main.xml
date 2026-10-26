@@ -11,6 +11,9 @@
     <entry name="hiddenItems" type="StringList">
       <default></default>
     </entry>
+    <entry name="autoItems" type="StringList">
+      <default></default>
+    </entry>
     <entry name="maxColumns" type="Int">
       <default>4</default>
     </entry>

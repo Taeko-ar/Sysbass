@@ -14,6 +14,7 @@ KCM.SimpleKCM {
     property alias cfg_maxRows: maxRowsSpin.value
     property var cfg_shownItems: []
     property var cfg_hiddenItems: []
+    property var cfg_autoItems: []
 
     readonly property QtObject sniModel: SystemTray.StatusNotifierModel {}
 
@@ -60,13 +61,14 @@ KCM.SimpleKCM {
                 }
 
                 QQC2.ComboBox {
-                    model: [i18n("Overflow popup"), i18n("Panel"), i18n("Always hidden")]
-                    // Indexes match Placement.Overflow, Panel, Hidden
-                    currentIndex: Placement.placement(row.itemId, configPage.cfg_shownItems, configPage.cfg_hiddenItems)
+                    model: [i18n("Overflow popup"), i18n("Panel"), i18n("Always hidden"), i18n("Panel when active")]
+                    // Indexes match Placement.Overflow, Panel, Hidden, Auto
+                    currentIndex: Placement.placement(row.itemId, configPage.cfg_shownItems, configPage.cfg_hiddenItems, configPage.cfg_autoItems)
                     onActivated: index => {
-                        const lists = Placement.setPlacement(row.itemId, index, configPage.cfg_shownItems, configPage.cfg_hiddenItems);
+                        const lists = Placement.setPlacement(row.itemId, index, configPage.cfg_shownItems, configPage.cfg_hiddenItems, configPage.cfg_autoItems);
                         configPage.cfg_shownItems = lists.shown;
                         configPage.cfg_hiddenItems = lists.hidden;
+                        configPage.cfg_autoItems = lists.auto;
                     }
                 }
             }

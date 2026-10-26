@@ -327,16 +327,25 @@ private Q_SLOTS:
         };
 
         // New apps land in the overflow popup
-        QCOMPARE(eval("placement('steam', [], [])"), QStringLiteral("0"));
-        QCOMPARE(eval("placement('steam', ['steam'], [])"), QStringLiteral("1"));
-        QCOMPARE(eval("placement('steam', [], ['steam'])"), QStringLiteral("2"));
+        QCOMPARE(eval("placement('steam', [], [], [])"), QStringLiteral("0"));
+        QCOMPARE(eval("placement('steam', ['steam'], [], [])"), QStringLiteral("1"));
+        QCOMPARE(eval("placement('steam', [], ['steam'], [])"), QStringLiteral("2"));
+        QCOMPARE(eval("placement('steam', [], [], ['steam'])"), QStringLiteral("3"));
+
+        // "Panel when active" follows the app's status; the others ignore it
+        QCOMPARE(eval("resolve(Auto, true)"), QStringLiteral("1"));
+        QCOMPARE(eval("resolve(Auto, false)"), QStringLiteral("0"));
+        QCOMPARE(eval("resolve(Hidden, true)"), QStringLiteral("2"));
+        QCOMPARE(eval("resolve(Overflow, true)"), QStringLiteral("0"));
 
         // Moving an icon removes it from its old list
-        QCOMPARE(eval("setPlacement('steam', Panel, [], ['steam'])"), QStringLiteral(R"({"shown":["steam"],"hidden":[]})"));
-        QCOMPARE(eval("setPlacement('steam', Hidden, ['a', 'steam'], [])"), QStringLiteral(R"({"shown":["a"],"hidden":["steam"]})"));
-        QCOMPARE(eval("setPlacement('steam', Overflow, ['steam'], ['b'])"), QStringLiteral(R"({"shown":[],"hidden":["b"]})"));
+        QCOMPARE(eval("setPlacement('steam', Panel, [], ['steam'], [])"), QStringLiteral(R"({"shown":["steam"],"hidden":[],"auto":[]})"));
+        QCOMPARE(eval("setPlacement('steam', Hidden, ['a', 'steam'], [], [])"), QStringLiteral(R"({"shown":["a"],"hidden":["steam"],"auto":[]})"));
+        QCOMPARE(eval("setPlacement('steam', Overflow, ['steam'], ['b'], [])"), QStringLiteral(R"({"shown":[],"hidden":["b"],"auto":[]})"));
+        QCOMPARE(eval("setPlacement('steam', Auto, ['steam'], [], [])"), QStringLiteral(R"({"shown":[],"hidden":[],"auto":["steam"]})"));
+        QCOMPARE(eval("setPlacement('steam', Panel, [], [], ['steam'])"), QStringLiteral(R"({"shown":["steam"],"hidden":[],"auto":[]})"));
         // Picking the same place twice doesn't duplicate it
-        QCOMPARE(eval("setPlacement('steam', Panel, ['steam'], [])"), QStringLiteral(R"({"shown":["steam"],"hidden":[]})"));
+        QCOMPARE(eval("setPlacement('steam', Panel, ['steam'], [], [])"), QStringLiteral(R"({"shown":["steam"],"hidden":[],"auto":[]})"));
     }
 };
 
